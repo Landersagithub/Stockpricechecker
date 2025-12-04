@@ -92,10 +92,14 @@ def is_pse_stock(symbol):
     """Check if this is a Philippine stock"""
     return symbol.upper().endswith('.PS')
 
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_yahoo_data(symbol, period="1y"):
     """Fetch stock data from Yahoo Finance"""
     try:
+        import time
+        # Add a small delay to avoid rate limiting
+        time.sleep(0.5)
+        
         stock = yf.Ticker(symbol)
         hist = stock.history(period=period)
         
@@ -109,7 +113,11 @@ def fetch_yahoo_data(symbol, period="1y"):
         
         return hist, info, is_pse
     except Exception as e:
-        st.error(f"Error fetching Yahoo data: {e}")
+        if "429" in str(e) or "Rate" in str(e):
+            st.error("⚠️ Yahoo Finance rate limit reached. Please wait 30 seconds and try again.")
+            st.info("💡 Tip: Avoid clicking buttons rapidly. The app caches data for 1 hour.")
+        else:
+            st.error(f"Error fetching Yahoo data: {e}")
         return None, None, False
 
 def fetch_data_hybrid(symbol):
