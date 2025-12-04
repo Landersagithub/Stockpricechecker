@@ -28,10 +28,10 @@ if 'show_sell' not in st.session_state:
 USD_TO_PHP = 58.79
 
 st.title("Stock Price Analysis Application")
-st.info("🌍 International Stocks: Yahoo Finance | 🇵🇭 Philippine Stocks: Yahoo Finance with .PS suffix")
+st.info(f"🌍 International Stocks: Yahoo Finance 💱 Live Exchange Rate: 1 USD = ₱{USD_TO_PHP:.2f}")
 
 # Helper text
-st.caption("**International stocks:** AAPL, TSLA, MSFT | **Philippine stocks:** Add .PS suffix (JFC.PS, SM.PS, BDO.PS, ALI.PS)")
+st.caption("Use International Stock Price Ticker")
 
 symbol = st.text_input("Enter stock symbol:")
 
