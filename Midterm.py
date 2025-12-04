@@ -96,28 +96,38 @@ def is_pse_stock(symbol):
 def fetch_yahoo_data(symbol, period="1y"):
     """Fetch stock data from Yahoo Finance"""
     try:
-        import time
-        # Add a small delay to avoid rate limiting
-        time.sleep(0.5)
+        # Create a session to reuse connections
+        import requests_cache
+        from requests import Session
+        from requests_cache import CacheMixin, SQLiteCache
+        from requests_ratelimiter import LimiterMixin, MemoryQueueBucket
+        from pyrate_limiter import Duration, RequestRate, Limiter
         
-        stock = yf.Ticker(symbol)
+        class CachedLimiterSession(CacheMixin, LimiterMixin, Session):
+            pass
+        
+        session = CachedLimiterSession(
+            limiter=Limiter(RequestRate(2, Duration.SECOND*5)),  # 2 requests per 5 seconds
+            bucket_class=MemoryQueueBucket,
+            backend=SQLiteCache("yfinance.cache"),
+        )
+        
+        stock = yf.Ticker(symbol, session=session)
         hist = stock.history(period=period)
         
         if hist.empty:
             return None, None, False
         
         info = stock.info
-        
-        # Check if it's a Philippine stock
         is_pse = symbol.upper().endswith('.PS')
         
         return hist, info, is_pse
     except Exception as e:
-        if "429" in str(e) or "Rate" in str(e):
-            st.error("⚠️ Yahoo Finance rate limit reached. Please wait 30 seconds and try again.")
-            st.info("💡 Tip: Avoid clicking buttons rapidly. The app caches data for 1 hour.")
+        if "429" in str(e) or "Rate" in str(e) or "Too Many Requests" in str(e):
+            st.error("⚠️ Yahoo Finance rate limit reached. Please wait a moment and try again.")
+            st.info("💡 This app caches data for 1 hour. Try refreshing in a few seconds.")
         else:
-            st.error(f"Error fetching Yahoo data: {e}")
+            st.error(f"Error: {e}")
         return None, None, False
 
 def fetch_data_hybrid(symbol):
