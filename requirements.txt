@@ -4,7 +4,3 @@ pandas
 plotly
 numpy
 scikit-learn
-requests
-requests-cache
-requests-ratelimiter
-pyrate-limiter
