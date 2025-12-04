@@ -2,6 +2,9 @@ streamlit
 yfinance
 pandas
 plotly
-scikit-learn
 numpy
+scikit-learn
 requests
+requests-cache
+requests-ratelimiter
+pyrate-limiter
