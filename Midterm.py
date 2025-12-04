@@ -92,42 +92,38 @@ def is_pse_stock(symbol):
     """Check if this is a Philippine stock"""
     return symbol.upper().endswith('.PS')
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=7200, show_spinner=False)  # Cache for 2 hours
 def fetch_yahoo_data(symbol, period="1y"):
     """Fetch stock data from Yahoo Finance"""
     try:
-        # Create a session to reuse connections
-        import requests_cache
-        from requests import Session
-        from requests_cache import CacheMixin, SQLiteCache
-        from requests_ratelimiter import LimiterMixin, MemoryQueueBucket
-        from pyrate_limiter import Duration, RequestRate, Limiter
+        import time
+        import random
         
-        class CachedLimiterSession(CacheMixin, LimiterMixin, Session):
-            pass
+        # Add a small random delay to avoid rate limiting
+        time.sleep(random.uniform(1, 2))
         
-        session = CachedLimiterSession(
-            limiter=Limiter(RequestRate(2, Duration.SECOND*5)),  # 2 requests per 5 seconds
-            bucket_class=MemoryQueueBucket,
-            backend=SQLiteCache("yfinance.cache"),
-        )
-        
-        stock = yf.Ticker(symbol, session=session)
+        # Let yfinance handle the session internally (required for curl_cffi)
+        stock = yf.Ticker(symbol)
         hist = stock.history(period=period)
         
         if hist.empty:
             return None, None, False
         
+        # Add another small delay before fetching info
+        time.sleep(0.5)
         info = stock.info
+        
         is_pse = symbol.upper().endswith('.PS')
         
         return hist, info, is_pse
+        
     except Exception as e:
-        if "429" in str(e) or "Rate" in str(e) or "Too Many Requests" in str(e):
-            st.error("⚠️ Yahoo Finance rate limit reached. Please wait a moment and try again.")
-            st.info("💡 This app caches data for 1 hour. Try refreshing in a few seconds.")
+        error_msg = str(e)
+        if "429" in error_msg or "Rate" in error_msg or "Too Many Requests" in error_msg:
+            st.error("⚠️ Yahoo Finance rate limit reached. Please wait 1-2 minutes and try again.")
+            st.info("💡 Tip: Data is cached for 2 hours once loaded. Avoid rapid button clicks.")
         else:
-            st.error(f"Error: {e}")
+            st.error(f"Error fetching data: {error_msg}")
         return None, None, False
 
 def fetch_data_hybrid(symbol):
