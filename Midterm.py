@@ -80,7 +80,7 @@ st.title("Stock Price Analysis Application")
 st.info(f"International Stocks: Yahoo Finance | Live Exchange Rate: 1 USD = ₱{USD_TO_PHP:.2f}")
 
 # Helper text
-st.caption("**International stocks:** AAPL, TSLA, MSFT | **Philippine stocks:** Add .PS suffix (JFC.PS, SM.PS, BDO.PS, ALI.PS)")
+st.caption("**International stocks:** AAPL, TSLA, MSFT")
 
 if all_tickers:
     col_input1, col_input2 = st.columns([1, 1])
@@ -925,3 +925,4 @@ if symbol:
         st.info("**Tips:**\n- For international stocks: Use symbols like AAPL, TSLA, GOOGL\n- For Philippine stocks: Add .PS suffix like JFC.PS, SM.PS, BDO.PS, or just type JFC, SM, BDO (auto-adds .PS)")
 else:
     st.write("Enter a stock symbol above to get started.")
+
