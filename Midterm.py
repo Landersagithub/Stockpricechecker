@@ -25,15 +25,79 @@ if 'show_sell' not in st.session_state:
     st.session_state.show_sell = False
 
 # Exchange rate USD to PHP
-USD_TO_PHP = 58.79
+# Fetch live exchange rate USD to PHP
+# Fetch live exchange rate USD to PHP
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+
+def get_live_exchange_rate():
+    """Fetch live USD to PHP exchange rate from Yahoo Finance"""
+    try:
+        # Use Yahoo Finance for consistency
+        forex = yf.Ticker("USDPHP=X")
+        rate = forex.history(period="1d")['Close'].iloc[-1]
+        return round(rate, 3)
+    except Exception as e:
+        st.warning(f"Could not fetch live rate: {e}. Using fallback rate.")
+        return 58.938  # Fallback rate
+
+USD_TO_PHP = get_live_exchange_rate()
+
+@st.cache_data(ttl=86400)
+def get_all_tickers():
+    """Fetch verified Yahoo Finance tickers"""
+    try:
+        import yfinance as yf
+        import requests
+        
+        tickers = []
+        
+        # GitHub CSV source (most reliable)
+        url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
+        response = requests.get(url, headers={'User-Agent': 'Mozilla/5.0'})
+        
+        if response.status_code == 200:
+            from io import StringIO
+            df = pd.read_csv(StringIO(response.text))
+            tickers = df['Symbol'].tolist()
+            
+            # Add your custom tickers
+            custom_tickers = ['UVRBF', 'JBFCY', 'D03.SI', 'EMI.SI', 'GBSMF']
+            tickers.extend(custom_tickers)
+            
+            # Clean up
+            tickers = sorted(list(set([t.strip().replace('.', '-') if '.SI' not in t else t.strip() for t in tickers if t])))
+            return tickers
+        else:
+            raise Exception("Could not fetch data")
+            
+    except Exception as e:
+        st.error(f"Could not fetch ticker list: {e}")
+        return []
+
+all_tickers = get_all_tickers()
 
 st.title("Stock Price Analysis Application")
-st.info(f"🌍 International Stocks: Yahoo Finance 💱 Live Exchange Rate: 1 USD = ₱{USD_TO_PHP:.2f}")
+st.info(f"International Stocks: Yahoo Finance | Live Exchange Rate: 1 USD = ₱{USD_TO_PHP:.2f}")
 
 # Helper text
-st.caption("Use International Stock Price Ticker")
+st.caption("**International stocks:** AAPL, TSLA, MSFT | **Philippine stocks:** Add .PS suffix (JFC.PS, SM.PS, BDO.PS, ALI.PS)")
 
-symbol = st.text_input("Enter stock symbol:")
+if all_tickers:
+    col_input1, col_input2 = st.columns([1, 1])
+    
+    with col_input1:
+        selected_ticker = st.selectbox(
+            f"Select stock ({len(all_tickers):,} available):",
+            [""] + all_tickers,
+            format_func=lambda x: "-- Type or select --" if x == "" else x
+        )
+    
+    with col_input2:
+        manual_input = st.text_input("Or type symbol:")
+    
+    symbol = manual_input if manual_input else selected_ticker
+else:
+    symbol = st.text_input("Enter stock symbol:")
 
 # Buttons - Row 1
 st.write("### Actions:")
@@ -92,38 +156,24 @@ def is_pse_stock(symbol):
     """Check if this is a Philippine stock"""
     return symbol.upper().endswith('.PS')
 
-@st.cache_data(ttl=7200, show_spinner=False)  # Cache for 2 hours
+@st.cache_data(ttl=3600)
 def fetch_yahoo_data(symbol, period="1y"):
     """Fetch stock data from Yahoo Finance"""
     try:
-        import time
-        import random
-        
-        # Add a small random delay to avoid rate limiting
-        time.sleep(random.uniform(1, 2))
-        
-        # Let yfinance handle the session internally (required for curl_cffi)
         stock = yf.Ticker(symbol)
         hist = stock.history(period=period)
         
         if hist.empty:
             return None, None, False
         
-        # Add another small delay before fetching info
-        time.sleep(0.5)
         info = stock.info
         
+        # Check if it's a Philippine stock
         is_pse = symbol.upper().endswith('.PS')
         
         return hist, info, is_pse
-        
     except Exception as e:
-        error_msg = str(e)
-        if "429" in error_msg or "Rate" in error_msg or "Too Many Requests" in error_msg:
-            st.error("⚠️ Yahoo Finance rate limit reached. Please wait 1-2 minutes and try again.")
-            st.info("💡 Tip: Data is cached for 2 hours once loaded. Avoid rapid button clicks.")
-        else:
-            st.error(f"Error fetching data: {error_msg}")
+        st.error(f"Error fetching Yahoo data: {e}")
         return None, None, False
 
 def fetch_data_hybrid(symbol):
@@ -241,6 +291,93 @@ if symbol:
 
             st.table(latest_df)
             
+            # VOLATILITY ANALYSIS
+            st.write("---")
+            st.write("### 📊 Volatility Analysis")
+            
+            # Calculate various volatility metrics
+            # 1. Standard Deviation (30-day)
+            recent_30d = hist_df.head(min(30, len(hist_df)))
+            daily_returns = recent_30d['Close_PHP'].pct_change().dropna()
+            std_dev_30d = daily_returns.std() * 100  # Convert to percentage
+            
+            # 2. Historical Volatility (Annualized)
+            historical_volatility = daily_returns.std() * np.sqrt(252) * 100  # 252 trading days/year
+            
+            # 3. Average True Range (ATR) - last 14 days
+            recent_14d = hist_df.head(min(14, len(hist_df)))
+            high_low = recent_14d['High_PHP'] - recent_14d['Low_PHP']
+            atr = high_low.mean()
+            atr_percent = (atr / recent_14d['Close_PHP'].mean()) * 100
+            
+            # 4. Volatility Classification
+            if historical_volatility < 15:
+                volatility_class = "Low Volatility"
+                volatility_color = "green"
+                volatility_desc = "Stable stock with small price movements"
+            elif historical_volatility < 30:
+                volatility_class = "Moderate Volatility"
+                volatility_color = "orange"
+                volatility_desc = "Average volatility, typical for most stocks"
+            elif historical_volatility < 50:
+                volatility_class = "High Volatility"
+                volatility_color = "red"
+                volatility_desc = "Significant price swings, higher risk"
+            else:
+                volatility_class = "Very High Volatility"
+                volatility_color = "darkred"
+                volatility_desc = "Extreme price movements, very risky"
+            
+            # Display volatility metrics
+            col_vol1, col_vol2, col_vol3, col_vol4 = st.columns(4)
+            
+            with col_vol1:
+                st.metric("Daily Volatility (30d)", f"{std_dev_30d:.2f}%")
+            with col_vol2:
+                st.metric("Annual Volatility", f"{historical_volatility:.2f}%")
+            with col_vol3:
+                st.metric("Avg True Range (14d)", f"₱{atr:.2f}")
+            with col_vol4:
+                st.metric("ATR %", f"{atr_percent:.2f}%")
+            
+            # Volatility classification
+            st.markdown(
+                f"""
+                <div style="padding: 15px; background-color: #f0f0f0; border-radius: 8px; border-left: 5px solid {volatility_color};">
+                    <h4 style="margin-top:0; color: {volatility_color};">Classification: {volatility_class}</h4>
+                    <p style="margin-bottom:0;">{volatility_desc}</p>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
+            
+            # Volatility interpretation
+            with st.expander("📖 Understanding Volatility Metrics"):
+                st.write("""
+                **Daily Volatility (30-day):** 
+                - Measures day-to-day price fluctuations over the last 30 days
+                - Higher = More unpredictable daily price changes
+                
+                **Annual Volatility (Annualized):**
+                - Standard measure used by investors
+                - < 15%: Low volatility (stable stocks like utilities)
+                - 15-30%: Moderate (typical large-cap stocks)
+                - 30-50%: High (growth stocks, tech)
+                - > 50%: Very high (speculative, penny stocks)
+                
+                **Average True Range (ATR):**
+                - Shows the average price range per day
+                - Higher ATR = Bigger daily swings
+                - Useful for setting stop-loss orders
+                
+                **ATR %:**
+                - ATR as a percentage of stock price
+                - Easier to compare across different stocks
+                - 2-5%: Low volatility
+                - 5-10%: Moderate volatility
+                - 10%+: High volatility
+                """)
+            
             with st.expander("Company Information"):
                 col_info1, col_info2 = st.columns(2)
                 with col_info1:
@@ -343,34 +480,52 @@ if symbol:
                 pred_df = hist_df.sort_index(ascending=True).tail(training_days).copy()
                 pred_df['Day_Num'] = np.arange(len(pred_df))
                 
+                # Train PRICE model
                 X = pred_df['Day_Num'].values.reshape(-1, 1)
-                y = pred_df['Close_PHP'].values
+                y_price = pred_df['Close_PHP'].values
                 
-                model = LinearRegression()
-                model.fit(X, y)
-                pred_df['Predicted'] = model.predict(X)
+                model_price = LinearRegression()
+                model_price.fit(X, y_price)
+                pred_df['Predicted_Price'] = model_price.predict(X)
                 
+                # Train VOLUME model
+                y_volume = pred_df['Volume'].values
+                model_volume = LinearRegression()
+                model_volume.fit(X, y_volume)
+                pred_df['Predicted_Volume'] = model_volume.predict(X)
+                
+                # Predict future prices
                 future_days = np.arange(len(pred_df), len(pred_df) + predict_days).reshape(-1, 1)
-                future_prices = model.predict(future_days)
+                future_prices = model_price.predict(future_days)
+                future_volumes = model_volume.predict(future_days)
+                
+                # Ensure volumes are non-negative
+                future_volumes = np.maximum(future_volumes, 0)
                 
                 last_date = pred_df.index[-1]
                 future_dates = pd.date_range(start=last_date + timedelta(days=1), periods=predict_days, freq='D')
                 
                 future_df = pd.DataFrame({
                     'Date': future_dates,
-                    'Predicted_Price_PHP': future_prices
+                    'Predicted_Price_PHP': future_prices,
+                    'Predicted_Volume': future_volumes
                 })
                 future_df.set_index('Date', inplace=True)
                 
                 from sklearn.metrics import r2_score, mean_absolute_error
-                r2 = r2_score(y, pred_df['Predicted'])
-                mae = mean_absolute_error(y, pred_df['Predicted'])
+                r2_price = r2_score(y_price, pred_df['Predicted_Price'])
+                mae_price = mean_absolute_error(y_price, pred_df['Predicted_Price'])
                 
+                r2_volume = r2_score(y_volume, pred_df['Predicted_Volume'])
+                mae_volume = mean_absolute_error(y_volume, pred_df['Predicted_Volume'])
+                
+                # Display Price metrics
+                st.write("### 📈 Price Prediction Metrics")
                 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
                 with col_m1:
-                    st.metric("R² Score", f"{r2:.4f}")
+                    st.metric("R² Score", f"{r2_price:.4f}")
                 with col_m2:
-                    st.metric("Mean Abs Error", f"₱{mae:.2f}")
+                    st.metric("Mean Abs Error", f"₱{mae_price:.2f}")
                 with col_m3:
                     st.metric("Current Price", f"₱{pred_df['Close_PHP'].iloc[-1]:.2f}")
                 with col_m4:
@@ -378,17 +533,42 @@ if symbol:
                     price_change = predicted_price - pred_df['Close_PHP'].iloc[-1]
                     st.metric(f"Predicted ({predict_days}d)", f"₱{predicted_price:.2f}", f"{price_change:+.2f}")
                 
-                if r2 > 0.7:
-                    st.success(f"Strong linear trend detected (R² = {r2:.4f})")
-                elif r2 > 0.4:
-                    st.info(f"Moderate linear trend (R² = {r2:.4f})")
+                if r2_price > 0.7:
+                    st.success(f"Strong linear trend detected (R² = {r2_price:.4f})")
+                elif r2_price > 0.4:
+                    st.info(f"Moderate linear trend (R² = {r2_price:.4f})")
                 else:
-                    st.warning(f"Weak linear trend (R² = {r2:.4f})")
+                    st.warning(f"Weak linear trend (R² = {r2_price:.4f})")
                 
-                st.write("### Future Price Predictions Table")
+                # Display Volume metrics
+                st.write("### 📊 Volume Prediction Metrics")
+                col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+                with col_v1:
+                    st.metric("R² Score", f"{r2_volume:.4f}")
+                with col_v2:
+                    st.metric("Mean Abs Error", f"{mae_volume:,.0f}")
+                with col_v3:
+                    st.metric("Current Volume", f"{int(pred_df['Volume'].iloc[-1]):,}")
+                with col_v4:
+                    predicted_volume = future_volumes[-1]
+                    volume_change = predicted_volume - pred_df['Volume'].iloc[-1]
+                    st.metric(f"Predicted ({predict_days}d)", f"{int(predicted_volume):,}", f"{volume_change:+,.0f}")
                 
+                if r2_volume > 0.5:
+                    st.success(f"Moderate volume trend detected (R² = {r2_volume:.4f})")
+                elif r2_volume > 0.3:
+                    st.info(f"Weak volume trend (R² = {r2_volume:.4f})")
+                else:
+                    st.warning(f"Very weak volume trend (R² = {r2_volume:.4f}) - Volume predictions may be unreliable")
+                
+                st.write("---")
+                
+                st.write("### Future Price & Volume Predictions Table")
+                
+                # Format the future predictions table
                 future_display = future_df.copy()
                 future_display['Predicted_Price_PHP'] = future_display['Predicted_Price_PHP'].apply(lambda x: f"₱{x:.2f}")
+                future_display['Predicted_Volume'] = future_display['Predicted_Volume'].apply(lambda x: f"{int(x):,}")
                 if not is_pse:
                     future_display['Predicted_Price_USD'] = (future_df['Predicted_Price_PHP'] / USD_TO_PHP).apply(lambda x: f"${x:.2f}")
                 future_display.index = future_display.index.strftime('%Y-%m-%d')
@@ -419,7 +599,7 @@ if symbol:
                 
                 fig_pred.add_trace(go.Scatter(
                     x=pred_df.index,
-                    y=pred_df['Predicted'],
+                    y=pred_df['Predicted_Price'],
                     mode='lines',
                     name='Fitted Line',
                     line=dict(color='orange', width=2, dash='dash')
@@ -444,14 +624,60 @@ if symbol:
                 
                 st.plotly_chart(fig_pred, use_container_width=True)
                 
+                # Volume Prediction Chart
+                st.write("### Volume Prediction Chart")
+                
+                fig_vol = go.Figure()
+                
+                fig_vol.add_trace(go.Bar(
+                    x=pred_df.index,
+                    y=pred_df['Volume'],
+                    name='Actual Volume',
+                    marker=dict(color='blue', opacity=0.6)
+                ))
+                
+                fig_vol.add_trace(go.Scatter(
+                    x=pred_df.index,
+                    y=pred_df['Predicted_Volume'],
+                    mode='lines',
+                    name='Fitted Volume',
+                    line=dict(color='orange', width=2, dash='dash')
+                ))
+                
+                fig_vol.add_trace(go.Scatter(
+                    x=future_df.index,
+                    y=future_df['Predicted_Volume'],
+                    mode='lines+markers',
+                    name='Future Volume Prediction',
+                    line=dict(color='red', width=2, dash='dot'),
+                    marker=dict(size=6)
+                ))
+                
+                fig_vol.update_layout(
+                    height=600,
+                    xaxis_title="Date",
+                    yaxis_title="Volume",
+                    hovermode="x unified",
+                    showlegend=True
+                )
+                
+                st.plotly_chart(fig_vol, use_container_width=True)
+                
                 st.write("### Model Details")
                 
-                slope = model.coef_[0]
-                intercept = model.intercept_
-                st.code(f"Price = ₱{intercept:.2f} + ₱{slope:.2f} × Day")
+                slope_price = model_price.coef_[0]
+                intercept_price = model_price.intercept_
+                st.code(f"Price = ₱{intercept_price:.2f} + ₱{slope_price:.2f} × Day")
                 
-                trend_direction = "upward" if slope > 0 else "downward"
-                st.write(f"**Trend:** {trend_direction} trend of **₱{abs(slope):.2f} per day**.")
+                slope_volume = model_volume.coef_[0]
+                intercept_volume = model_volume.intercept_
+                st.code(f"Volume = {intercept_volume:,.0f} + {slope_volume:,.0f} × Day")
+                
+                trend_direction_price = "upward" if slope_price > 0 else "downward"
+                trend_direction_volume = "increasing" if slope_volume > 0 else "decreasing"
+                
+                st.write(f"**Price Trend:** {trend_direction_price} trend of **₱{abs(slope_price):.2f} per day**.")
+                st.write(f"**Volume Trend:** {trend_direction_volume} trend of **{abs(slope_volume):,.0f} shares per day**.")
 
         # BUY RECOMMENDATION
         if st.session_state.show_buy:
@@ -460,7 +686,7 @@ if symbol:
             else:
                 st.subheader("Buy Recommendation Analysis")
                 
-                st.info("This analysis uses linear regression prediction.")
+                st.info("This analysis uses linear regression prediction for both price and volume.")
                 
                 col_buy1, col_buy2 = st.columns(2)
                 with col_buy1:
@@ -469,36 +695,58 @@ if symbol:
                     investment_horizon = st.slider("Investment time horizon (days):", 7, 90, 30)
                 
                 current_price_php = hist_df.iloc[0]['Close_PHP']
+                current_volume = hist_df.iloc[0]['Volume']
                 
                 pred_df = hist_df.sort_index(ascending=True).tail(min(90, len(hist_df))).copy()
                 pred_df['Day_Num'] = np.arange(len(pred_df))
                 
+                # Train price model
                 X = pred_df['Day_Num'].values.reshape(-1, 1)
-                y = pred_df['Close_PHP'].values
-                model = LinearRegression()
-                model.fit(X, y)
+                y_price = pred_df['Close_PHP'].values
+                model_price = LinearRegression()
+                model_price.fit(X, y_price)
+                
+                # Train volume model
+                y_volume = pred_df['Volume'].values
+                model_volume = LinearRegression()
+                model_volume.fit(X, y_volume)
                 
                 future_day = np.array([[len(pred_df) + investment_horizon]])
-                predicted_price_php = model.predict(future_day)[0]
+                predicted_price_php = model_price.predict(future_day)[0]
+                predicted_volume = max(0, model_volume.predict(future_day)[0])
                 
                 price_change = predicted_price_php - current_price_php
                 price_change_pct = (price_change / current_price_php) * 100
+                
+                volume_change = predicted_volume - current_volume
+                volume_change_pct = (volume_change / current_volume) * 100 if current_volume > 0 else 0
                 
                 total_investment = num_shares * current_price_php
                 potential_value = num_shares * predicted_price_php
                 potential_profit = potential_value - total_investment
                 
-                pred_df['Predicted'] = model.predict(X)
+                pred_df['Predicted_Price'] = model_price.predict(X)
+                pred_df['Predicted_Volume'] = model_volume.predict(X)
+                
                 from sklearn.metrics import r2_score
-                r2 = r2_score(y, pred_df['Predicted'])
+                r2_price = r2_score(y_price, pred_df['Predicted_Price'])
+                r2_volume = r2_score(y_volume, pred_df['Predicted_Volume'])
                 
                 col_p1, col_p2, col_p3 = st.columns(3)
                 with col_p1:
                     st.metric("Current Price", f"₱{current_price_php:.2f}")
                 with col_p2:
-                    st.metric(f"Predicted ({investment_horizon}d)", f"₱{predicted_price_php:.2f}", f"{price_change_pct:+.2f}%")
+                    st.metric(f"Predicted Price ({investment_horizon}d)", f"₱{predicted_price_php:.2f}", f"{price_change_pct:+.2f}%")
                 with col_p3:
-                    st.metric("R² Score", f"{r2:.4f}")
+                    st.metric("Price R² Score", f"{r2_price:.4f}")
+                
+                col_v1, col_v2, col_v3 = st.columns(3)
+                with col_v1:
+                    st.metric("Current Volume", f"{int(current_volume):,}")
+                with col_v2:
+                    st.metric(f"Predicted Volume ({investment_horizon}d)", f"{int(predicted_volume):,}", f"{volume_change_pct:+.2f}%")
+                with col_v3:
+                    st.metric("Volume R² Score", f"{r2_volume:.4f}")
                 
                 st.write("---")
                 st.write("### Investment Analysis")
@@ -507,8 +755,10 @@ if symbol:
                     "Item": [
                         "Number of Shares",
                         "Current Price per Share",
+                        "Current Volume",
                         "Total Investment",
                         f"Predicted Price ({investment_horizon}d)",
+                        f"Predicted Volume ({investment_horizon}d)",
                         "Predicted Value",
                         "Potential Profit/Loss",
                         "Return (%)"
@@ -516,8 +766,10 @@ if symbol:
                     "Amount": [
                         f"{num_shares:,}",
                         f"₱{current_price_php:.2f}",
+                        f"{int(current_volume):,}",
                         f"₱{total_investment:,.2f}",
                         f"₱{predicted_price_php:.2f}",
+                        f"{int(predicted_volume):,}",
                         f"₱{potential_value:,.2f}",
                         f"₱{potential_profit:+,.2f}",
                         f"{price_change_pct:+.2f}%"
@@ -529,22 +781,32 @@ if symbol:
                 st.write("### Recommendation")
                 
                 is_uptrend = price_change > 0
-                is_reliable = r2 > 0.5
+                is_reliable = r2_price > 0.5
                 is_significant = price_change_pct > 5
+                volume_increasing = volume_change > 0
                 
                 if is_uptrend and is_reliable and is_significant:
                     st.success("✅ STRONG BUY")
-                    st.write(f"- Predicted {price_change_pct:.2f}% increase")
-                    st.write(f"- Good reliability (R² = {r2:.4f})")
+                    st.write(f"- Predicted {price_change_pct:.2f}% price increase")
+                    st.write(f"- Good price reliability (R² = {r2_price:.4f})")
+                    if volume_increasing:
+                        st.write(f"- Volume expected to increase by {volume_change_pct:.2f}% (bullish signal)")
+                    else:
+                        st.write(f"- Volume expected to decrease by {abs(volume_change_pct):.2f}% (caution)")
                 elif is_uptrend and is_reliable:
                     st.info("ℹ️ MODERATE BUY")
-                    st.write(f"- Predicted {price_change_pct:.2f}% increase")
+                    st.write(f"- Predicted {price_change_pct:.2f}% price increase")
+                    st.write(f"- Volume trend: {volume_change_pct:+.2f}%")
                 elif is_uptrend:
                     st.warning("⚠️ CAUTIOUS - LOW CONFIDENCE")
-                    st.write(f"- Low reliability (R² = {r2:.4f})")
+                    st.write(f"- Low price reliability (R² = {r2_price:.4f})")
                 else:
                     st.error("❌ NOT RECOMMENDED")
-                    st.write(f"- Predicted {price_change_pct:.2f}% decrease")
+                    st.write(f"- Predicted {price_change_pct:.2f}% price decrease")
+                    
+                # Volume liquidity warning
+                if predicted_volume < current_volume * 0.5:
+                    st.warning("⚠️ **Liquidity Warning:** Predicted volume drop of more than 50% may indicate reduced trading activity.")
 
         # SELL ANALYSIS
         if st.session_state.show_sell:
@@ -562,6 +824,7 @@ if symbol:
                     hold_days = st.slider("Hold before selling (days):", 7, 90, 30)
                 
                 current_price_php = hist_df.iloc[0]['Close_PHP']
+                current_volume = hist_df.iloc[0]['Volume']
                 
                 total_purchase = shares_owned * purchase_price
                 total_current = shares_owned * current_price_php
@@ -571,19 +834,29 @@ if symbol:
                 pred_df = hist_df.sort_index(ascending=True).tail(min(90, len(hist_df))).copy()
                 pred_df['Day_Num'] = np.arange(len(pred_df))
                 
+                # Train price model
                 X = pred_df['Day_Num'].values.reshape(-1, 1)
-                y = pred_df['Close_PHP'].values
-                model = LinearRegression()
-                model.fit(X, y)
+                y_price = pred_df['Close_PHP'].values
+                model_price = LinearRegression()
+                model_price.fit(X, y_price)
+                
+                # Train volume model
+                y_volume = pred_df['Volume'].values
+                model_volume = LinearRegression()
+                model_volume.fit(X, y_volume)
                 
                 future_day = np.array([[len(pred_df) + hold_days]])
-                predicted_price = model.predict(future_day)[0]
+                predicted_price = model_price.predict(future_day)[0]
+                predicted_volume = max(0, model_volume.predict(future_day)[0])
                 
                 total_predicted = shares_owned * predicted_price
                 predicted_profit = total_predicted - total_purchase
                 predicted_profit_pct = (predicted_profit / total_purchase) * 100
                 
                 additional = predicted_profit - current_profit
+                
+                volume_change = predicted_volume - current_volume
+                volume_change_pct = (volume_change / current_volume) * 100 if current_volume > 0 else 0
                 
                 st.write("### Current Position")
                 col_m1, col_m2, col_m3, col_m4 = st.columns(4)
@@ -596,12 +869,20 @@ if symbol:
                 with col_m4:
                     st.metric(f"Predicted ({hold_days}d)", f"₱{predicted_price:.2f}")
                 
+                st.write("### Volume Analysis")
+                col_v1, col_v2 = st.columns(2)
+                with col_v1:
+                    st.metric("Current Volume", f"{int(current_volume):,}")
+                with col_v2:
+                    st.metric(f"Predicted Volume ({hold_days}d)", f"{int(predicted_volume):,}", f"{volume_change_pct:+.2f}%")
+                
                 st.write("---")
                 st.write("### Analysis")
                 
                 analysis_df = pd.DataFrame({
                     "Scenario": ["Sell Now", f"Sell in {hold_days}d"],
                     "Price": [f"₱{current_price_php:.2f}", f"₱{predicted_price:.2f}"],
+                    "Volume": [f"{int(current_volume):,}", f"{int(predicted_volume):,}"],
                     "Total Value": [f"₱{total_current:,.2f}", f"₱{total_predicted:,.2f}"],
                     "Profit": [f"₱{current_profit:+,.2f}", f"₱{predicted_profit:+,.2f}"],
                     "Return": [f"{current_profit_pct:+.2f}%", f"{predicted_profit_pct:+.2f}%"]
@@ -618,15 +899,26 @@ if symbol:
                 
                 has_profit = current_profit > 0
                 will_increase = predicted_price > current_price_php
+                volume_increasing = volume_change > 0
                 
                 if has_profit and current_profit_pct > 10 and not will_increase:
                     st.success("✅ STRONG SELL - Lock in profits")
+                    if not volume_increasing:
+                        st.write("- Volume declining suggests weakening interest")
                 elif has_profit and will_increase:
                     st.info("ℹ️ HOLD - More gains expected")
+                    if volume_increasing:
+                        st.write("- Rising volume supports price increase")
+                    else:
+                        st.write("- Declining volume may limit upside")
                 elif not has_profit and will_increase:
                     st.warning("⚠️ HOLD - Wait for recovery")
                 else:
                     st.error("❌ MINIMIZE LOSS")
+                    
+                # Liquidity warning for selling
+                if predicted_volume < current_volume * 0.5:
+                    st.warning("⚠️ **Liquidity Warning:** Significant volume drop predicted. May be harder to sell at desired price.")
 
     else:
         st.error(f"Unable to fetch data for: {symbol.upper()}")
